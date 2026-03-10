@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Sourdough App</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #fcf9f2; color: #4a3f35;
+            max-width: 600px; margin: 0 auto; padding: 20px;
+        }
+        h1 { text-align: center; color: #d35400; }
+        .card {
+            background: white; padding: 15px; border-radius: 8px;
+            margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        button {
+            background-color: #d35400; color: white; border: none;
+            padding: 10px 15px; border-radius: 5px; font-size: 1em;
+            cursor: pointer; margin-top: 5px;
+        }
+        button:hover { background-color: #a04000; }
+        .btn-green { background-color: #27ae60; width: 100%; font-size: 1.2em; padding: 15px; }
+        .input-group { margin: 10px 0; display: flex; align-items: center; gap: 10px;}
+        input[type="number"] { padding: 8px; width: 70px; border: 1px solid #ccc; border-radius: 4px; }
+        .prediction-box { background-color: #fbede6; border-left: 4px solid #d35400; padding: 10px; margin-top: 10px; font-weight: bold;}
+    </style>
+</head>
+<body>
+
+    <h1>🍞 Sourdough App</h1>
+
+    <div class="card">
+        <h3>Predict Completion Time</h3>
+        <p style="font-size: 0.9em; color: #666;">Estimate when your bread will be ready to bake based on room temperature. (Assumes 2.5hrs for autolyse/folds, variable bulk ferment, and 12hrs fridge proof).</p>
+        
+        <div class="input-group">
+            <label>Current Temp (°C):</label>
+            <input type="number" id="auto-temp" value="22">
+            <button onclick="getWeather()">📍 Auto-Detect Temp</button>
+        </div>
+        
+        <button onclick="calculatePrediction()" style="background-color: #2980b9;">Calculate Bake Time</button>
+        
+        <div id="prediction-result" class="prediction-box" style="display: none;"></div>
+    </div>
+
+    <button class="btn-green" onclick="startProcess()">Start Process Timers</button>
+    <div id="steps-container" style="margin-top: 20px;"></div>
+
+    <script>
+        // --- WEATHER & PREDICTION LOGIC ---
+        function getWeather() {
+            if ("geolocation" in navigator) {
+                document.getElementById('auto-temp').value = "...";
+                navigator.geolocation.getCurrentPosition(async (position) => {
+                    const lat = position.coords.latitude;
+                    const lon = position.coords.longitude;
+                    try {
+                        const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+                        const data = await response.json();
+                        document.getElementById('auto-temp').value = Math.round(data.current_weather.temperature);
+                    } catch (error) {
+                        alert("Could not fetch weather. Please enter manually.");
+                        document.getElementById('auto-temp').value = 22;
+                    }
+                }, () => {
+                    alert("Location access denied. Please enter temp manually.");
+                    document.getElementById('auto-temp').value = 22;
+                });
+            } else {
+                alert("Geolocation is not supported by your browser.");
+            }
+        }
+
+        function getBulkHours(temp) {
+            if (temp >= 28) return 4;
+            if (temp >= 26) return 5;
+            if (temp >= 24) return 6;
+            if (temp >= 22) return 8;
+            if (temp >= 20) return 10;
+            return 12; // 18-19C
+        }
+
+        function calculatePrediction() {
+            const temp = document.getElementById('auto-temp').value;
+            const bulkHours = getBulkHours(temp);
+            
+            // Formula: 2.5h (Autolyse + SFs) + Bulk Hours + 12h (Fridge)
+            const totalHours = 2.5 + bulkHours + 12;
+            
+            const completionTime = new Date();
+            completionTime.setHours(completionTime.getHours() + totalHours);
+            
+            const resultBox = document.getElementById('prediction-result');
+            resultBox.style.display = 'block';
+            resultBox.innerHTML = `If you mix the dough right now at ${temp}°C, it will be ready to bake at approximately:<br><br>
+            <span style="font-size: 1.2em; color: #d35400;">${completionTime.toLocaleDateString()} at ${completionTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
+        }
+
+        // --- STEP TRACKING LOGIC ---
+        const stepsData = [
+            { id: 'sub-feed', name: 'Subsistence Feed', type: 'log' },
+            { id: 'prod-feed', name: 'Production Feed', type: 'log' },
+            { id: 'mix', name: 'Mix Dough', type: 'log' },
+            { id: 'autolyse', name: 'Autolyse (30m)', type: 'timer', minutes: 30 },
+            { id: 'sf1', name: 'Stretch & Fold 1 (30m)', type: 'timer', minutes: 30 },
+            { id: 'sf2', name: 'Stretch & Fold 2 (30m)', type: 'timer', minutes: 30 },
+            { id: 'sf3', name: 'Stretch & Fold 3 (30m)', type: 'timer', minutes: 30 },
+            { id: 'sf4', name: 'Stretch & Fold 4 (30m)', type: 'timer', minutes: 30 },
+            { id: 'bulk', name: 'Bulk Ferment', type: 'bulk-timer' },
+            { id: 'fridge', name: 'Fridge Proof', type: 'log' }
+        ];
+
+        let intervals = {};
+
+        function startProcess() {
+            const container = document.getElementById('steps-container');
+            container.innerHTML = ''; 
+            Object.values(intervals).forEach(clearInterval);
+            intervals = {};
+
+            stepsData.forEach((step, index) => {
+                let stepHTML = `<div class="card" id="step-${step.id}">
+                    <strong>${index + 1}. ${step.name}</strong><br>`;
+                
+                if (step.type === 'log') {
+                    stepHTML += `<button onclick="logTime('${step.id}')">Mark Complete</button>
+                                 <div id="log-${step.id}" style="font-size: 0.9em; color: #7f8c8d; margin-top: 5px;"></div>`;
+                } else if (step.type === 'timer') {
+                    stepHTML += `<button onclick="startTimer('${step.id}', ${step.minutes})">Start Timer</button>
+                                 <div id="timer-${step.id}" style="font-family: monospace; font-size: 1.2em; color: #e74c3c; font-weight: bold;"></div>`;
+                } else if (step.type === 'bulk-timer') {
+                    stepHTML += `<button onclick="startBulkTimer()">Start Temp-Based Timer</button>
+                                 <div style="font-size: 0.8em; color: #777;">(Uses the temperature from the prediction box above)</div>
+                                 <div id="timer-bulk" style="font-family: monospace; font-size: 1.2em; color: #e74c3c; font-weight: bold;"></div>`;
+                }
+                stepHTML += `</div>`;
+                container.innerHTML += stepHTML;
+            });
+        }
+
+        function logTime(id) {
+            const now = new Date();
+            document.getElementById(`log-${id}`).innerText = `Completed at ${now.toLocaleTimeString()}`;
+        }
+
+        function startTimer(id, minutes) {
+            if (intervals[id]) clearInterval(intervals[id]);
+            let timeRemaining = minutes * 60;
+            updateTimerDisplay(id, timeRemaining);
+
+            intervals[id] = setInterval(() => {
+                timeRemaining--;
+                updateTimerDisplay(id, timeRemaining);
+                if (timeRemaining <= 0) {
+                    clearInterval(intervals[id]);
+                    document.getElementById(`timer-${id}`).innerText = "Done!";
+                    alert(`${stepsData.find(s => s.id === id).name} timer is up!`);
+                }
+            }, 1000);
+        }
+
+        function startBulkTimer() {
+            const temp = document.getElementById('auto-temp').value;
+            const hours = getBulkHours(temp);
+            startTimer('bulk', hours * 60);
+        }
+
+        function updateTimerDisplay(id, totalSeconds) {
+            const h = Math.floor(totalSeconds / 3600);
+            const m = Math.floor((totalSeconds % 3600) / 60);
+            const s = totalSeconds % 60;
+            document.getElementById(`timer-${id}`).innerText = `${h > 0 ? h + 'h ' : ''}${m}m ${s}s remaining`;
+        }
+    </script>
+</body>
+</html>
